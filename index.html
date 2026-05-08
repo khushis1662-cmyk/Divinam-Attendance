@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Attendance Pro | Google Maps Integration</title>
+    <style>
+        :root { --primary: #2563eb; --success: #16a34a; --danger: #dc2626; --dark: #1e293b; }
+        body { font-family: 'Segoe UI', sans-serif; background: #f8fafc; display: flex; justify-content: center; padding: 20px; color: var(--dark); }
+        .container { background: white; width: 100%; max-width: 550px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.05); padding: 30px; }
+        
+        .header { text-align: center; margin-bottom: 25px; border-bottom: 1px solid #e2e8f0; padding-bottom: 20px; }
+        .clock { font-size: 2.5rem; font-weight: 800; color: var(--primary); margin: 5px 0; }
+        
+        .input-group { margin-bottom: 20px; }
+        label { display: block; font-weight: 600; margin-bottom: 8px; font-size: 0.9rem; }
+        input, select { width: 100%; padding: 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 1rem; transition: 0.2s; }
+        input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1); }
+
+        .btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 30px; }
+        .btn { padding: 15px; border: none; border-radius: 10px; cursor: pointer; font-weight: 700; color: white; font-size: 1rem; }
+        .btn-in { background: var(--success); }
+        .btn-out { background: var(--danger); }
+        .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        .filter-card { background: #f1f5f9; padding: 20px; border-radius: 12px; margin-top: 20px; }
+        .filter-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; }
+        .btn-export { background: var(--dark); width: 100%; padding: 12px; border-radius: 8px; color: white; font-weight: 600; border: none; cursor: pointer; }
+
+        .log-preview { margin-top: 25px; font-size: 0.85rem; border-top: 1px solid #e2e8f0; padding-top: 20px; }
+        .log-item { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f1f5f9; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="header">
+        <h2>Field Attendance</h2>
+        <div class="clock" id="live-clock">00:00:00</div>
+        <div id="live-date" style="color: #64748b; font-weight: 500;"></div>
+    </div>
+
+    <div class="input-group">
+        <label>Employee Name</label>
+        <input type="text" id="empName" placeholder="Enter Full Name" oninput="toggleButtons()">
+    </div>
+
+    <div class="btn-grid">
+        <button id="inBtn" class="btn btn-in" onclick="markAttendance('IN')" disabled>Clock In</button>
+        <button id="outBtn" class="btn btn-out" onclick="markAttendance('OUT')" disabled>Clock Out</button>
+    </div>
+
+    <div class="filter-card">
+        <label>Download Monthly Report</label>
+        <div class="filter-row">
+            <select id="selMonth">
+                <option value="1">January</option><option value="2">February</option>
+                <option value="3">March</option><option value="4">April</option>
+                <option value="5" selected>May</option><option value="6">June</option>
+                <option value="7">July</option><option value="8">August</option>
+                <option value="9">September</option><option value="10">October</option>
+                <option value="11">November</option><option value="12">December</option>
+            </select>
+            <input type="number" id="selYear" value="2026">
+        </div>
+        <button class="btn-export" onclick="exportData()">Download Excel with Map Links</button>
+    </div>
+
+    <div class="log-preview">
+        <strong>Last 3 Activities:</strong>
+        <div id="logItems"></div>
+    </div>
+</div>
+
+<script>
+    let db = JSON.parse(localStorage.getItem('att_v3')) || [];
+
+    // Live Clock Logic
+    setInterval(() => {
+        const now = new Date();
+        document.getElementById('live-clock').innerText = now.toLocaleTimeString();
+        document.getElementById('live-date').innerText = now.toDateString();
+    }, 1000);
+
+    function toggleButtons() {
+        const name = document.getElementById('empName').value.trim();
+        document.getElementById('inBtn').disabled = name === "";
+        document.getElementById('outBtn').disabled = name === "";
+    }
+
+    function markAttendance(type) {
+        const name = document.getElementById('empName').value.trim();
+        
+        if (!navigator.geolocation) {
+            return alert("GPS not supported on this browser.");
+        }
+
+        navigator.geolocation.getCurrentPosition((pos) => {
+            const now = new Date();
+            const lat = pos.coords.latitude;
+            const lon = pos.coords.longitude;
+
+            const entry = {
+                name: name,
+                type: type,
+                date: now.toLocaleDateString(),
+                month: now.getMonth() + 1,
+                year: now.getFullYear(),
+                time: now.toLocaleTimeString(),
+                lat: lat,
+                lon: lon,
+                // Creating the Google Maps Link
+                mapUrl: `https://www.google.com/maps?q=${lat},${lon}`
+            };
+
+            db.push(entry);
+            localStorage.setItem('att_v3', JSON.stringify(db));
+            updatePreview();
+            alert(`${type} Recorded at ${entry.time}`);
+        }, (err) => {
+            alert("Error: Location Denied. Please enable GPS and allow browser access.");
+        }, { enableHighAccuracy: true });
+    }
+
+    function updatePreview() {
+        const container = document.getElementById('logItems');
+        const latest = db.slice(-3).reverse();
+        container.innerHTML = latest.map(l => `
+            <div class="log-item">
+                <span><b>${l.type}</b>: ${l.time}</span>
+                <span style="color:var(--primary)">${l.name}</span>
+            </div>
+        `).join('');
+    }
+
+    function exportData() {
+        const m = parseInt(document.getElementById('selMonth').value);
+        const y = parseInt(document.getElementById('selYear').value);
+
+        const filtered = db.filter(item => item.month === m && item.year === y);
+
+        if (filtered.length === 0) {
+            return alert("No data found for the selected Month/Year.");
+        }
+
+        // CSV Header with Map_Link
+        let csv = "Employee Name,Date,Time,Type,Latitude,Longitude,Google_Maps_Link\n";
+        
+        filtered.forEach(item => {
+            // Surround map URL with double quotes to ensure it's a single clickable cell in Excel
+            csv += `"${item.name}",${item.date},${item.time},${item.type},${item.lat},${item.lon},"${item.mapUrl}"\n`;
+        });
+
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `Attendance_Report_${m}_${y}.csv`;
+        link.click();
+    }
+
+    // Initial Preview
+    updatePreview();
+</script>
+
+</body>
+</html>
