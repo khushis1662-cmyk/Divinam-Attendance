@@ -3,7 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Attendance Pro | Secure Field Tracking</title>
+    <title>Attendance Pro | Cloud Sync Field Tracking</title>
+    
+    <!-- Firebase Cloud SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+
     <style>
         :root { 
             --primary: #2563eb; 
@@ -177,6 +182,14 @@
             font-size: 0.85rem;
             text-align: center;
         }
+
+        .sync-badge {
+            font-size: 0.75rem;
+            color: var(--success);
+            font-weight: 600;
+            text-align: center;
+            margin-bottom: 10px;
+        }
     </style>
 </head>
 <body>
@@ -184,6 +197,7 @@
 <div class="container">
     <div class="header">
         <h2>Attendance Pro</h2>
+        <div class="sync-badge">☁️ Cloud Sync Active</div>
         <div class="clock" id="live-clock">00:00:00</div>
         <div id="live-date" style="color: var(--gray); font-weight: 500;"></div>
     </div>
@@ -241,7 +255,7 @@
                 <button class="btn btn-dark" onclick="exportData()">Download Excel (CSV) Report</button>
             </div>
 
-            <label>All Employee Records</label>
+            <label>All Employee Records (Live Cloud)</label>
             <div class="table-wrapper">
                 <table>
                     <thead>
@@ -253,7 +267,7 @@
                         </tr>
                     </thead>
                     <tbody id="adminTableBody">
-                        <!-- Populated by JS -->
+                        <!-- Populated dynamically from Firebase -->
                     </tbody>
                 </table>
             </div>
@@ -262,10 +276,31 @@
 </div>
 
 <script>
-    // System Database Initialization
-    let db = JSON.parse(localStorage.getItem('att_v3')) || [];
+    // -------------------------------------------------------------
+    // Firebase Configuration
+    // -------------------------------------------------------------
+    const firebaseConfig = {
+        apiKey: "AIzaSyDgp31PwgBLu7LTBKsTtKD2iIJEJ1m5tfM",
+        authDomain: "attendance-ds.firebaseapp.com",
+        projectId: "attendance-ds",
+        storageBucket: "attendance-ds.firebasestorage.app",
+        messagingSenderId: "641197744877",
+        appId: "1:641197744877:web:bba6fefab993c97e6aa2e4",
+        measurementId: "G-JKEXPFW7J2"
+    };
+
+    // Initialize Cloud Database
+    let db = null;
+    let cloudRecordsCache = []; 
     let isAdminAuthenticated = false;
-    
+
+    try {
+        firebase.initializeApp(firebaseConfig);
+        db = firebase.firestore();
+    } catch(e) {
+        console.warn("Firebase initialization error:", e);
+    }
+
     // Set Default Month in Admin Dropdown to Current Month
     document.getElementById('selMonth').value = new Date().getMonth() + 1;
 
@@ -297,14 +332,14 @@
         document.getElementById('outBtn').disabled = name === "";
     }
 
-    // UPDATED: Fixed attendance handler that records data regardless of GPS errors
+    // Mark Attendance & Save to Cloud Database
     function markAttendance(type) {
         const name = document.getElementById('empName').value.trim();
         
         function saveEntry(lat = "N/A", lon = "N/A", mapUrl = "Location Unavailable") {
             const now = new Date();
             const entry = {
-                id: Date.now(),
+                timestamp: Date.now(),
                 name: name,
                 type: type,
                 date: now.toLocaleDateString(),
@@ -316,18 +351,17 @@
                 mapUrl: mapUrl
             };
 
-            db.push(entry);
-            localStorage.setItem('att_v3', JSON.stringify(db));
-
-            // Feedback display for Employee
-            const statusDiv = document.getElementById('lastActionNotice');
-            statusDiv.style.display = 'block';
-            statusDiv.innerHTML = `Successfully recorded <b>${type}</b> for <b>${name}</b> at ${entry.time}`;
-
-            alert(`${type} recorded successfully.`);
-            
-            // Sync with Admin Dashboard
-            if (isAdminAuthenticated) renderAdminTable();
+            // Save to Firebase Cloud DB
+            if (db) {
+                db.collection("attendance").add(entry).then(() => {
+                    showSuccessMessage(type, name, entry.time);
+                }).catch((err) => {
+                    console.error("Cloud Save Error: ", err);
+                    saveToLocalStorage(entry);
+                });
+            } else {
+                saveToLocalStorage(entry);
+            }
         }
 
         if (!navigator.geolocation) {
@@ -340,19 +374,32 @@
                     saveEntry(lat, lon, `https://www.google.com/maps?q=${lat},${lon}`);
                 },
                 (err) => {
-                    // Fallback execution if iframe/browser blocks GPS permissions
-                    saveEntry();
+                    saveEntry(); // Fallback if browser/iframe blocks location
                 },
                 { enableHighAccuracy: true, timeout: 5000 }
             );
         }
     }
 
+    function saveToLocalStorage(entry) {
+        let localDb = JSON.parse(localStorage.getItem('att_v3')) || [];
+        localDb.push(entry);
+        localStorage.setItem('att_v3', JSON.stringify(localDb));
+        showSuccessMessage(entry.type, entry.name, entry.time);
+    }
+
+    function showSuccessMessage(type, name, time) {
+        const statusDiv = document.getElementById('lastActionNotice');
+        statusDiv.style.display = 'block';
+        statusDiv.innerHTML = `Successfully recorded <b>${type}</b> for <b>${name}</b> at ${time}`;
+        alert(`${type} recorded successfully!`);
+        if (isAdminAuthenticated) renderAdminTable();
+    }
+
     // Admin Authentication
     function verifyAdmin() {
         const pass = document.getElementById('adminPass').value;
-        // Default admin password
-        if (pass === '1510DivinamS') {
+        if (pass === 'admin123') {
             isAdminAuthenticated = true;
             document.getElementById('adminAuth').style.display = 'none';
             document.getElementById('adminDashboard').style.display = 'block';
@@ -369,7 +416,7 @@
         document.getElementById('adminDashboard').style.display = 'none';
     }
 
-    // Render Admin Records Table
+    // Fetch and Render Admin Records from the Cloud
     function renderAdminTable() {
         if (!isAdminAuthenticated) return;
 
@@ -377,14 +424,47 @@
         const y = parseInt(document.getElementById('selYear').value);
         const tbody = document.getElementById('adminTableBody');
 
-        const filtered = db.filter(item => item.month === m && item.year === y);
+        tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;">Loading cloud records...</td></tr>`;
 
-        if (filtered.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; color: var(--gray);">No attendance records found for this period.</td></tr>`;
+        if (db) {
+            // Fetch live records across all devices from Firestore
+            db.collection("attendance")
+              .where("month", "==", m)
+              .where("year", "==", y)
+              .get()
+              .then((querySnapshot) => {
+                  cloudRecordsCache = [];
+                  querySnapshot.forEach((doc) => {
+                      cloudRecordsCache.push(doc.data());
+                  });
+
+                  // Sort by most recent
+                  cloudRecordsCache.sort((a, b) => b.timestamp - a.timestamp);
+                  displayTableRows(cloudRecordsCache);
+              })
+              .catch((err) => {
+                  console.error("Firestore Error: ", err);
+                  loadLocalFallback(m, y);
+              });
+        } else {
+            loadLocalFallback(m, y);
+        }
+    }
+
+    function loadLocalFallback(m, y) {
+        let localDb = JSON.parse(localStorage.getItem('att_v3')) || [];
+        cloudRecordsCache = localDb.filter(item => item.month === m && item.year === y);
+        displayTableRows(cloudRecordsCache.slice().reverse());
+    }
+
+    function displayTableRows(records) {
+        const tbody = document.getElementById('adminTableBody');
+        if (records.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="4" style="text-align:center; color: var(--gray);">No records found for this period.</td></tr>`;
             return;
         }
 
-        tbody.innerHTML = filtered.slice().reverse().map(item => `
+        tbody.innerHTML = records.map(item => `
             <tr>
                 <td><b>${item.name}</b></td>
                 <td><span class="badge ${item.type === 'IN' ? 'badge-in' : 'badge-out'}">${item.type}</span></td>
@@ -394,22 +474,20 @@
         `).join('');
     }
 
-    // Export CSV Functionality (Admin Only)
+    // Export CSV Functionality for Admin
     function exportData() {
         if (!isAdminAuthenticated) return;
 
         const m = parseInt(document.getElementById('selMonth').value);
         const y = parseInt(document.getElementById('selYear').value);
 
-        const filtered = db.filter(item => item.month === m && item.year === y);
-
-        if (filtered.length === 0) {
+        if (cloudRecordsCache.length === 0) {
             return alert("No data available to export for the selected Month and Year.");
         }
 
         let csv = "Employee Name,Type,Date,Time,Latitude,Longitude,Google_Maps_URL\n";
         
-        filtered.forEach(item => {
+        cloudRecordsCache.forEach(item => {
             csv += `"${item.name}",${item.type},${item.date},${item.time},${item.lat},${item.lon},"${item.mapUrl}"\n`;
         });
 
